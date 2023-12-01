@@ -211,6 +211,7 @@ def reduce_within_clusters(X, n_clusters, labels, sample_weight=None, reduce_wei
     X = X.astype(dtype=cp.float64, copy=False)
     sample_weight = sample_weight.astype(dtype=cp.float64, copy=False)
 
+    # code for cluster-wise calculation
     ix = cp.argsort(labels)
     labels = labels[ix]
     X = X[ix]

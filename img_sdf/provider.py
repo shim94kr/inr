@@ -53,7 +53,7 @@ class IMGDataset(Dataset):
         if not isinstance(cmax, list):
             cmax = [cmax] * self.s_dims.shape[0]
         self.cmin = torch.tensor(cmin)  # ... y x
-        self.cmax = torch.tensor(cmax)  # ... y x
+        self.cmax = torch.tensor(cmax)  # ... y x  
         self.s_dims = torch.tensor(s_dims)  # ... h w
         self.n_point = self.s_dims.prod().item()
         self.d = self.s_dims.shape[0]
@@ -76,7 +76,7 @@ class IMGDataset(Dataset):
         # get spatial gradients
         self.gt_grad = kornia.filters.SpatialGradient(mode='sobel', order=1, normalized=True)(self.gt_cpu.movedim(-1, 0)[None])  # [1 c 2 h w]
         self.gt_grad = self.gt_grad[0].movedim((0, 1), (-2, -1)).pow(2).sum(dim=[-2, -1]).sqrt()[..., None]  # [h w 1]
-        self.gt_grad_cpu = self.gt_grad  # [h w 1]
+        self.gt_grad_cpu = self.gt_grad  # [h w 1] => This gradient is used for the weight of each point in clustering.
 
         # reshape
         self.gt = self.gt.reshape(-1, self.gt.shape[-1])

@@ -197,7 +197,7 @@ class rbf(nn.Module):
                 sparse_embd_grad=True, act='relu', lc_act=None, 
                 rbf_suffixes=None, kc_init_config=None, 
                 rbf_lc0_normalize=True, pe_freqs=[], pe_lc0_freq=None, pe_hg0_freq=None,
-                pe_lc0_rbf_freq=None, pe_lc0_rbf_keep=None, 
+                pe_lc0_rbf_freq=None, pe_lc0_rbf_keep=None, se_flag=0,
                 **kwargs):
         super().__init__()
         if not isinstance(cmin, list):
@@ -230,26 +230,15 @@ class rbf(nn.Module):
         self.pe_lc0_rbf_keep = pe_lc0_rbf_keep
         self.pe_lc0_freq = pe_lc0_freq
         self.pe_hg0_freq = pe_hg0_freq
+        self.se_flag = se_flag
         self.kc_mult = 1  # kc_mult=2 means extra copy of initial kc
 
         lc0_dim = n_hidden_fl
         hg0_dim = num_levels*level_dim
-        lcb0_dim = lc0_dim + hg0_dim
+        sc0_dim = n_hidden_fl * (self.se_flag == 1)
+        lcb0_dim = lc0_dim + hg0_dim + sc0_dim
         self.backbone_in_dim = lcb0_dim
         lcb0_dim = self.backbone_in_dim
-
-        if len(self.pe_lc0_freq) >= 2:
-            self.pe_lc0_freqs = torch.linspace(np.log2(self.pe_lc0_freq[0]), np.log2(self.pe_lc0_freq[1]), 
-                                               hidden_dim, device=0)
-            self.pe_lc0_freqs = torch.exp2(self.pe_lc0_freqs)
-        else:
-            self.pe_lc0_freqs = None
-        if len(self.pe_lc0_rbf_freq) >= 2 and self.pe_lc0_rbf_keep < lc0_dim:
-            self.pe_lc0_rbf_freqs = torch.linspace(np.log2(self.pe_lc0_rbf_freq[0]), np.log2(self.pe_lc0_rbf_freq[1]), 
-                                                   lc0_dim - self.pe_lc0_rbf_keep, device=0)
-            self.pe_lc0_rbf_freqs = torch.exp2(self.pe_lc0_rbf_freqs)
-        else:
-            self.pe_lc0_rbf_freqs = None
 
         self.kc_init_regular = {}
         for k, v in kc_init_config.items():
@@ -312,6 +301,24 @@ class rbf(nn.Module):
         self.kc0, self.ks0, self.lc0, self.ks_dims, k_dims, kc_interval = self.create_rbf_params(
             self.rbf_type, n_kernel, in_dim, lc0_dim, sparse_embd_grad, 
             self.cmin, self.cmax, ks_alpha, is_bag=False)
+        self.se0_layer = nn.Linear(np.prod(self.ks_dims), sc0_dim) if se_flag == 1 else lambda x:x
+        if se_flag == 2:
+            self.pe_lc0_rbf_keep += np.prod(self.ks_dims)
+
+        if len(self.pe_lc0_freq) >= 2:
+            self.pe_lc0_freqs = torch.linspace(np.log2(self.pe_lc0_freq[0]), np.log2(self.pe_lc0_freq[1]), 
+                                               hidden_dim, device=0)
+            self.pe_lc0_freqs = torch.exp2(self.pe_lc0_freqs)
+        else:
+            self.pe_lc0_freqs = None
+        if len(self.pe_lc0_rbf_freq) >= 2 and self.pe_lc0_rbf_keep < lc0_dim:
+            self.pe_lc0_rbf_freqs = torch.linspace(np.log2(self.pe_lc0_rbf_freq[0]), np.log2(self.pe_lc0_rbf_freq[1]), 
+                                                   lc0_dim - self.pe_lc0_rbf_keep, device=0)
+            self.pe_lc0_rbf_freqs = torch.exp2(self.pe_lc0_rbf_freqs)
+        else:
+            self.pe_lc0_rbf_freqs = None
+
+        
         self.register_buffer(f'k_dims_0', k_dims)
         self.register_buffer(f'kci0', kc_interval)
         
@@ -342,6 +349,8 @@ class rbf(nn.Module):
         else:
             raise NotImplementedError
 
+        if self.se_flag == 2:
+            lc_dim -= np.prod(ks_dims)
         if is_bag:
             lc = torch.nn.EmbeddingBag(n_kernel, lc_dim, scale_grad_by_freq=scale_grad_by_freq, 
                                        sparse=sparse_embd_grad, mode='sum')
@@ -514,13 +523,19 @@ class rbf(nn.Module):
         if kernel_idx is None:  # Use all kernels for each point
             kc = getattr(self, 'kc' + suffix).weight[None]  # [1 k d]
             ks = getattr(self, 'ks' + suffix).weight[None]
+
+            shape_out = self.se0_layer((ks - ks.mean(dim=1, keepdim=True)) / (ks.std(dim=1,keepdim=True) + 1e-5))
+
             ks = ks.view(*ks.shape[:2], *self.ks_dims)  # [1 k d d] or [1 k 1]
             rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
         else:
             kc = getattr(self, 'kc' + suffix)(kernel_idx)  # [p k d]
-            ks = getattr(self, 'ks' + suffix)(kernel_idx).view(*kernel_idx.shape, *self.ks_dims)  # [p k d d] or [p k d] or [p k 1]
+            ks = getattr(self, 'ks' + suffix)(kernel_idx)  # [p k d d] or [p k d] or [p k 1]
+            shape_out = self.se0_layer((ks - ks.mean(dim=1, keepdim=True)) / (ks.std(dim=1,keepdim=True) + 1e-5))
+
+            ks = ks.view(*kernel_idx.shape, *self.ks_dims)  # [1 k d d] or [1 k 1]
             rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
-        return rbf_out
+        return rbf_out, shape_out
 
     def forward(self, x_g, point_idx, **kwargs):
         """
@@ -536,25 +551,34 @@ class rbf(nn.Module):
             out = rbf_out @ self.lc0.weight  # [p hfl]
         else:
             kernel_idx = self.forward_kernel_idx(x_g, point_idx, suffix)
-            rbf_out = self.forward_rbf(x_g, kernel_idx, suffix)  # [p k_topk]
+            rbf_out, shape_out = self.forward_rbf(x_g, kernel_idx, suffix)  # [p k_topk]
             if self.rbf_lc0_normalize:
                 rbf_out = rbf_out / (rbf_out.detach().sum(-1, keepdim=True) + 1e-8)
 
             out = self.lc0(kernel_idx)  # [p k_topk d_lc0]
             rbf_out = rbf_out[..., None]  # [p k_topk 1]
             if len(self.pe_lc0_rbf_freq) >= 2 and self.pe_lc0_rbf_keep < out.shape[-1]:
-                if self.pe_lc0_rbf_keep > 0:
-                    rbf_out = torch.cat([rbf_out.expand(-1, -1, self.pe_lc0_rbf_keep), 
+                if self.pe_lc0_rbf_keep > 0 :
+                    rbf_out_mfs = torch.cat([rbf_out.expand(-1, -1, self.pe_lc0_rbf_keep), 
                         torch.sin(rbf_out * self.pe_lc0_rbf_freqs[None, None])], -1)  # [p k_topk d_lc0]
                 else:
-                    rbf_out = torch.sin(rbf_out * self.pe_lc0_rbf_freqs[None, None])  # [p k_topk d_lc0]
-            out = (out * rbf_out).sum(1)  # [p d_lc0]
+                    rbf_out_mfs = torch.sin(rbf_out * self.pe_lc0_rbf_freqs[None, None])  # [p k_topk d_lc0]
+
+            if self.se_flag == 1:
+                out_r = (out * rbf_out_mfs).sum(1)  # [p d_lc0]
+                out_sh = (out * shape_out).sum(1) # [p d_lc0]
+                out = torch.cat([out_r, out_sh], -1)
+            elif self.se_flag == 2:
+                out = torch.cat([shape_out, out], -1)
+                out = (out * rbf_out_mfs).sum(1)  # [p d_lc0]
+            else:
+                out = (out * rbf_out_mfs).sum(1)  # [p d_lc0]
 
         if self.num_levels > 0:
             out_hg = self.hg0(x_g / self.cmax_gpu.flip(-1)[None])  # [p d_hg0]
         else:
             out_hg = None
-            
+        
         if out_hg is not None:
             out = torch.cat([out_hg, out], -1)
         out = out + self.lcb0[None]

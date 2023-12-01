@@ -392,6 +392,8 @@ def get_param_groups(model):
                 k = 'kc0'
             elif name.startswith('ks0'):
                 k = 'ks0'
+            elif name.startswith('se0'):
+                k = 'se0'
             else:
                 raise NotImplementedError
             if k not in param_groups:

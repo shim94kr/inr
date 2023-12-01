@@ -428,7 +428,7 @@ def stratified_shuffle_chunked(s_dims, b_dims, chunk_size=10000*5000, device=0):
     b, p = points_grid.shape[:-1]
 
     b_chunk = math.floor(chunk_size / p)
-    if b_chunk >= b:
+    if b <= b_chunk:
         order = torch.multinomial(torch.ones([b, p], device=device_cuda), p).to(device)  # b p
     else:
         order = torch.zeros([b, p], dtype=torch.long, device=device)
@@ -442,5 +442,5 @@ def stratified_shuffle_chunked(s_dims, b_dims, chunk_size=10000*5000, device=0):
     points_grid = points_grid.gather(1, order[..., None].expand(-1, -1, d)).to(torch.long)  # b p d
     s_dims = s_dims.to(device)
     mask = (points_grid < s_dims[None, None]).all(dim=-1)  # b p
-    points_grid = ravel_multi_index_loop(points_grid.flip(-1), s_dims.flip(-1))  # b p
+    points_grid = ravel_multi_index_loop(points_grid.flip(-1), s_dims.flip(-1))  # b p, flip applied to reflect index order!
     return points_grid.to(dtype=torch.int, device=device_cuda), mask.to(device_cuda)

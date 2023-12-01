@@ -145,5 +145,4 @@ def kw_init_v3(kc, points, points_weight, s_dims, device, alpha, points_sampling
 
     if rbf_type == 'nlin_s' or rbf_type == 'nlin_d':
         kw_sq[kw_sq < 0] = 1e-10
-
     return kw_sq
