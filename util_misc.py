@@ -27,7 +27,7 @@ import math
 import trimesh
 import mcubes
 from einops import rearrange
-
+from util_rot import get_quaternion_from_matrix_np, get_quaternion_from_matrix
 
 comb2d = [[0,0],[1,0],[0,1],[1,1]]
 comb3d = [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]
@@ -61,7 +61,6 @@ def get_grid_points(dims, align_corners, vmin=-1, vmax=1, device='cpu'):
     # points_grid: (*dims, num_dim), order in the last dim: [dim0, dim1, ...].
     # side_interval: (num_dim), order: [dim0, dim1, ...].
 
-
 def get_lower_int_power(x, d):
     out = int(x**(1/d))
     if (out+1)**d == x:
@@ -78,6 +77,9 @@ def get_rbf_params_per_kernel(rbf_type, in_dim, kc_mult=2):
         return int(in_dim*kc_mult + in_dim)
     elif rbf_type.endswith('_s'):
         return int(in_dim*kc_mult + 1)
+    elif rbf_type.endswith('_m'):
+        additional_dim = 3 if in_dim==2 else 7
+        return int(in_dim*kc_mult + additional_dim)
     else:
         raise NotImplementedError
 
@@ -103,6 +105,29 @@ def kw_sq_to_ks(kw_sq, kernel_type, is_scalar=False):
             ks = np.linalg.inv(kw_sq)
         else:
             ks = torch.linalg.inv(kw_sq).contiguous()
+    elif kernel_type[-2:] == '_m' and not is_scalar:
+        d = kw_sq.shape[-1]
+        if isinstance(kw_sq, np.ndarray):
+            cov_inv = np.linalg.inv(kw_sq)  # [... d d]
+            w, v = np.linalg.eig(cov_inv)  # [... d], [... d d]
+            w = w ** 0.5
+            if d == 3:
+                v = get_quaternion_from_matrix_np(v)
+            else:
+                v = np.arccos(v[:, 0, 0])[..., None]
+            ks = np.concatenate([w, v], axis=-1)
+
+        else:
+            cov_inv = torch.linalg.inv(kw_sq).contiguous()  # [... d d]
+            ww, v = torch.linalg.eig(cov_inv)  # [... d], [... d d]
+            ww, v = ww.real, v.real
+            ww = ww ** 0.5
+            if d == 3:
+                v = get_quaternion_from_matrix(v)
+            else:
+                v = torch.arccos(v[:, 0, 0])[..., None]
+            ks = torch.cat([ww, v], dim=-1)
+
     elif kernel_type[-2:] == '_f' and not is_scalar:
         d = kw_sq.shape[-1]
         if isinstance(kw_sq, np.ndarray):
@@ -168,7 +193,7 @@ def clip_kw_sq(data, kernel_type, cmin, cmax, dims, is_ks, is_flat, vmin_factor=
         else:  # data is ks
             vmin, vmax = kw_to_ks(vmax, kernel_type, True), kw_to_ks(vmin, kernel_type, True)
 
-        if kernel_type[-2:] == '_a' or (kernel_type[-2:] == '_f' and not is_ks):
+        if kernel_type[-2:] == '_a' or kernel_type[-2:] == '_m' or (kernel_type[-2:] == '_f' and not is_ks):
             if not is_flat:
                 # Diagonal elements
                 for i in range(dims.shape[0]):

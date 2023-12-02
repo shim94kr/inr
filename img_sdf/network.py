@@ -295,7 +295,7 @@ class rbf(nn.Module):
         self.backbone = nn.ModuleList(backbone)
         self.lcb0 = torch.nn.Parameter(torch.zeros(lcb0_dim))
 
-        # Activation parameters
+        # Activation parameters - before and after each layer
         for l in range(num_layers+1):
             setattr(self, f'a{l}', torch.nn.Parameter(torch.ones(1) * self.a_init[l]))
 
@@ -328,6 +328,8 @@ class rbf(nn.Module):
             ks_dims = [in_dim]
         elif rbf_type.endswith('_s'):
             ks_dims = [1]
+        elif rbf_type.endswith('_m'):
+            ks_dims = [3] if in_dim == 2 else [7]
         else:
             raise NotImplementedError
         kc = torch.nn.Embedding(n_kernel, in_dim, scale_grad_by_freq=False, sparse=sparse_embd_grad)
@@ -339,6 +341,9 @@ class rbf(nn.Module):
             ks.weight.data[:] = 1
         elif rbf_type.endswith('_s'):
             ks.weight.data[:] = 1
+        elif rbf_type.endswith('_m'):
+            ks.weight.data[:, :in_dim] = 1.
+            ks.weight.data[:, in_dim:] = 0.
         else:
             raise NotImplementedError
 
@@ -371,6 +376,8 @@ class rbf(nn.Module):
                 ks.weight.data *= 1 / (side_interval[None] / 2) ** 2
             elif rbf_type.endswith('_a'):
                 ks.weight.data *= (1 / (side_interval / 2) ** 2)[:, None].repeat(1, side_interval.shape[0]).view(1, -1)
+            elif rbf_type.endswith('_m'):
+                ks.weight.data[:, :in_dim] *= 1 / (side_interval[None] / 2) ** 2
             else:
                 raise NotImplementedError
         ks.weight.data *= ks_alpha
@@ -387,7 +394,7 @@ class rbf(nn.Module):
             params += util_misc.count_parameters(kc) * kc_mult
             if rbf_type.endswith('_a'):
                 params += (util_misc.count_parameters(ks)*(self.in_dim+1)/2/self.in_dim).astype(np.int64)
-            elif rbf_type.endswith('_s') or rbf_type.endswith('_d'):
+            elif rbf_type.endswith('_s') or rbf_type.endswith('_d') or rbf_type.endswith('_m'):
                 params += (util_misc.count_parameters(ks)).astype(np.int64)
             else:
                 raise NotImplementedError

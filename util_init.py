@@ -112,7 +112,7 @@ def kw_init_v3(kc, points, points_weight, s_dims, device, alpha, points_sampling
         chunk_size=int(2e8), return_dist=False)  # [p]
 
     points_offset = points.cpu() - kc[labels]  # [p d]
-    if rbf_type.endswith('_a') or rbf_type.endswith('_f'):
+    if rbf_type.endswith('_a') or rbf_type.endswith('_f') or rbf_type.endswith('_m'):
         points_data = points_offset[..., None] * points_offset[:, None, :]  # [p d d], covariance
     elif rbf_type.endswith('_d'):
         points_data = (points_offset**2)[..., None]  # [p d 1]

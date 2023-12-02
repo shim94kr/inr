@@ -29,6 +29,7 @@ import kornia
 
 import util_misc
 import util_init
+from util_rot import get_matrix_from_angle, get_matrix_from_quaternions
 
 
 class PE(torch.nn.Module):
@@ -138,6 +139,33 @@ def rbf_ivq_d_fb(x, kc, ks):
     out = (1 / (1 + (offset.pow(2) * ks).sum(-1)))
     return out, offset
 
+@torch.jit.script
+def rbf_ivq_m_fb(x, kc, ks):
+    """
+        Inputs:
+            x: (..., d)
+            kc: (..., k, d)
+            ks: (..., k, scale + rot)
+        Outputs:
+            (..., k)
+    """
+    offset = x[..., None, :] - kc  # (..., k, d)
+
+    d = x.shape[-1]
+    scale = ks[..., :d]
+    rot = ks[..., d:]
+    if d == 2:
+        rot = get_matrix_from_angle(rot)
+        ks = torch.matmul(rot * scale[..., None, :], scale[..., None] * rot.swapaxes(-1, -2))
+        out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
+    elif d == 3:
+        rot = get_matrix_from_quaternions(rot)
+        ks = torch.matmul(rot * scale[..., None, :], scale[..., None] * rot.swapaxes(-1, -2))
+        out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
+    else:
+        raise NotImplementedError
+
+    return out, offset
 
 @torch.jit.script
 def rbf_ivq_a_fb(x, kc, ks):

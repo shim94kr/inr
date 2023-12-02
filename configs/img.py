@@ -51,7 +51,7 @@ config.level_dim = 2
 
 # Model
 config.arch = 'rbf'
-config.rbf_type = 'ivq_a'
+config.rbf_type = 'ivq_m'
 config.rbf_lc0_normalize = True
 config.n_kernel = 'auto'
 config.point_nn_kernel = 4
