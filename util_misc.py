@@ -111,22 +111,23 @@ def kw_sq_to_ks(kw_sq, kernel_type, is_scalar=False):
             cov_inv = np.linalg.inv(kw_sq)  # [... d d]
             w, v = np.linalg.eig(cov_inv)  # [... d], [... d d]
             w = w ** 0.5
+            v = v.swapaxes(-1, -2)
             if d == 3:
                 v = get_quaternion_from_matrix_np(v)
             else:
                 v = np.arccos(v[:, 0, 0])[..., None]
             ks = np.concatenate([w, v], axis=-1)
-
         else:
             cov_inv = torch.linalg.inv(kw_sq).contiguous()  # [... d d]
-            ww, v = torch.linalg.eig(cov_inv)  # [... d], [... d d]
-            ww, v = ww.real, v.real
-            ww = ww ** 0.5
+            w, v = torch.linalg.eig(cov_inv)  # [... d], [... d d]
+            w, v = w.real, v.real
+            w = w ** 0.5
+            v = v.swapaxes(-1, -2)
             if d == 3:
                 v = get_quaternion_from_matrix(v)
             else:
                 v = torch.arccos(v[:, 0, 0])[..., None]
-            ks = torch.cat([ww, v], dim=-1)
+            ks = torch.cat([w, v], dim=-1)
 
     elif kernel_type[-2:] == '_f' and not is_scalar:
         d = kw_sq.shape[-1]

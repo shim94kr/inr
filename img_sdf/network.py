@@ -197,7 +197,7 @@ class rbf(nn.Module):
                 sparse_embd_grad=True, act='relu', lc_act=None, 
                 rbf_suffixes=None, kc_init_config=None, 
                 rbf_lc0_normalize=True, pe_freqs=[], pe_lc0_freq=None, pe_hg0_freq=None,
-                pe_lc0_rbf_freq=None, pe_lc0_rbf_keep=None, 
+                pe_lc0_rbf_freq=None, pe_lc0_rbf_keep=None, num_sh=0,
                 **kwargs):
         super().__init__()
         if not isinstance(cmin, list):
@@ -231,6 +231,7 @@ class rbf(nn.Module):
         self.pe_lc0_freq = pe_lc0_freq
         self.pe_hg0_freq = pe_hg0_freq
         self.kc_mult = 1  # kc_mult=2 means extra copy of initial kc
+        self.num_sh = num_sh
 
         lc0_dim = n_hidden_fl
         hg0_dim = num_levels*level_dim
@@ -271,6 +272,11 @@ class rbf(nn.Module):
             self.pe_x = util_network.PE(P)
             self.backbone_in_dim += self.pe_x.out_dim
 
+        # Spherical Harmonics
+        #if self.num_sh > 0:
+            #self.lsh0_rbf_norm = torch.nn.LayerNorm((self.point_nn_kernel,))
+            #self.sh_coeff = torch.nn.Linear(lc0_dim, self.num_sh)        
+
         # Hash grid
         if num_levels > 0:
             self.hg0, _ = get_encoder('hashgrid', input_dim=in_dim, num_levels=num_levels, 
@@ -309,7 +315,7 @@ class rbf(nn.Module):
         print('n_kernel:', n_kernel)
         self.n_kernel = n_kernel
         self.lc_dims = [[n_kernel, lc0_dim]]
-        self.kc0, self.ks0, self.lc0, self.ks_dims, k_dims, kc_interval = self.create_rbf_params(
+        self.kc0, self.ks0, self.lc0, self.lsh0, self.ks_dims, k_dims, kc_interval = self.create_rbf_params(
             self.rbf_type, n_kernel, in_dim, lc0_dim, sparse_embd_grad, 
             self.cmin, self.cmax, ks_alpha, is_bag=False)
         self.register_buffer(f'k_dims_0', k_dims)
@@ -353,6 +359,11 @@ class rbf(nn.Module):
         else:
             lc = torch.nn.Embedding(n_kernel, lc_dim, scale_grad_by_freq=scale_grad_by_freq, 
                                     sparse=sparse_embd_grad)
+        
+        lsh = None
+        if self.num_sh > 0:
+            lsh = torch.nn.Embedding(n_kernel, self.num_sh, scale_grad_by_freq=scale_grad_by_freq, 
+                                    sparse=sparse_embd_grad)
 
         # Initialize
         n_kernel_per_dim = int(math.ceil(n_kernel**(1/in_dim)))
@@ -382,7 +393,7 @@ class rbf(nn.Module):
                 raise NotImplementedError
         ks.weight.data *= ks_alpha
 
-        return kc, ks, lc, ks_dims, torch.tensor(k_dims).flip(-1), side_interval
+        return kc, ks, lc, lsh, ks_dims, torch.tensor(k_dims).flip(-1), side_interval
 
     def count_params_rbf_i(self, suffix, rbf_type, kc_mult=1):
         params = util_misc.count_parameters(getattr(self, f'lc{suffix}') if suffix=='0' else getattr(self, suffix))
@@ -418,6 +429,9 @@ class rbf(nn.Module):
 
     def init_lc(self):
         with torch.no_grad():
+            if self.num_sh > 0:
+                nn.init.zeros_(self.lsh0.weight)
+
             for i in range(1):
                 lci = getattr(self, f'lc{i}') if hasattr(self, f'lc{i}') else None
                 lcbi = getattr(self, f'lcb{i}') if hasattr(self, f'lcb{i}') else None
@@ -517,16 +531,22 @@ class rbf(nn.Module):
             
         return kernel_idx
 
-    def forward_rbf(self, x_g, kernel_idx, suffix):
+    def forward_rbf(self, x_g, kernel_idx, suffix, sh_coeff=None):
         if kernel_idx is None:  # Use all kernels for each point
             kc = getattr(self, 'kc' + suffix).weight[None]  # [1 k d]
             ks = getattr(self, 'ks' + suffix).weight[None]
             ks = ks.view(*ks.shape[:2], *self.ks_dims)  # [1 k d d] or [1 k 1]
-            rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
+            if 'sh' in self.rbf_type:
+                rbf_out, _ = self.rbf_fn(x_g, kc, ks, sh_coeff)  # [p k_topk]
+            else:
+                rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
         else:
             kc = getattr(self, 'kc' + suffix)(kernel_idx)  # [p k d]
             ks = getattr(self, 'ks' + suffix)(kernel_idx).view(*kernel_idx.shape, *self.ks_dims)  # [p k d d] or [p k d] or [p k 1]
-            rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
+            if 'sh' in self.rbf_type:
+                rbf_out, _ = self.rbf_fn(x_g, kc, ks, sh_coeff)  # [p k_topk]
+            else:
+                rbf_out, _ = self.rbf_fn(x_g, kc, ks)  # [p k_topk]
         return rbf_out
 
     def forward(self, x_g, point_idx, **kwargs):
@@ -538,16 +558,24 @@ class rbf(nn.Module):
         out_other = {}
 
         suffix = '0'
+            
         if self.point_nn_kernel <= 0:  # Use all kernels for each point
-            rbf_out = self.forward_rbf(x_g, None, suffix)  # [p nk]
+            sh_coeff = None
+            if self.num_sh > 0:
+                sh_coeff = self.sh_coeff(self.lc0.weight)
+            rbf_out = self.forward_rbf(x_g, None, suffix, sh_coeff)  # [p nk]
             out = rbf_out @ self.lc0.weight  # [p hfl]
         else:
             kernel_idx = self.forward_kernel_idx(x_g, point_idx, suffix)
-            rbf_out = self.forward_rbf(x_g, kernel_idx, suffix)  # [p k_topk]
+            sh_coeff = None
+            if self.num_sh > 0:
+                sh_coeff = self.lsh0(kernel_idx)  # [p k_topk d_lc0]
+
+            out = self.lc0(kernel_idx)  # [p k_topk d_lc0]
+            rbf_out = self.forward_rbf(x_g, kernel_idx, suffix, sh_coeff)  # [p k_topk]
             if self.rbf_lc0_normalize:
                 rbf_out = rbf_out / (rbf_out.detach().sum(-1, keepdim=True) + 1e-8)
 
-            out = self.lc0(kernel_idx)  # [p k_topk d_lc0]
             rbf_out = rbf_out[..., None]  # [p k_topk 1]
             if len(self.pe_lc0_rbf_freq) >= 2 and self.pe_lc0_rbf_keep < out.shape[-1]:
                 if self.pe_lc0_rbf_keep > 0:

@@ -46,6 +46,7 @@ config.record_training = False
 
 config.pe_lc0_freq = [1e1, 1e2]
 config.pe_lc0_rbf_freq = [2**-3, 2**12]
+config.num_sh = 0
 config.num_levels = 2
 config.level_dim = 2
 
@@ -111,6 +112,7 @@ config.optims["dec"] = {'type': 'Adam', 'lr': 1e-2, 'betas': (0.9, 0.99), 'eps':
 config.optims["hg0"] = {'type': 'Adam', 'lr': lr, 'betas': (0.9, 0.99), 'eps': eps, 'wd': 0}
 config.optims["lc0"] = {'type': 'Adam', 'lr': lr, 'betas': (0.9, 0.99), 'eps': eps, 'wd': 0}
 config.optims["lcb0"] = {'type': 'Adam', 'lr': lr, 'betas': (0.9, 0.99), 'eps': eps, 'wd': 0}
+#config.optims["ks0"] = {'type': 'Adam', 'lr': lr, 'betas': (0.9, 0.99), 'eps': eps, 'wd': 0}
 
 # lr schedulers
 T_max = config.max_steps
@@ -120,6 +122,7 @@ config.lr_schs["dec"] = {'type': 'cosine', 'T_max': T_max, 'gamma': lr_gamma}
 config.lr_schs["hg0"] = {'type': 'cosine', 'T_max': T_max, 'gamma': lr_gamma}
 config.lr_schs["lc0"] = {'type': 'cosine', 'T_max': T_max, 'gamma': lr_gamma}
 config.lr_schs["lcb0"] = {'type': 'cosine', 'T_max': T_max, 'gamma': lr_gamma}
+#config.lr_schs["ks0"] = {'type': 'cosine', 'T_max': T_max, 'gamma': lr_gamma}
 
 # RBF params init
 config.kc_init_config = {}

@@ -140,6 +140,56 @@ def rbf_ivq_d_fb(x, kc, ks):
     return out, offset
 
 @torch.jit.script
+def rbf_shivq_m_fb(x, kc, ks, sh_coeff):
+    """
+        Inputs:
+            x: (..., d)
+            kc: (..., k, d)
+            ks: (..., k, scale + rot)
+            sh_coeff: (..., k, n_sh)
+        Outputs:
+            (..., k)
+    """
+    offset = x[..., None, :] - kc  # (..., k, d)
+
+    num_sh = sh_coeff.shape[-1]
+    d = x.shape[-1]
+    scale = ks[..., :d]
+    rot = ks[..., d:]
+    if d == 2:
+        rot = get_matrix_from_angle(rot)
+        theta = torch.arctan2(offset[..., 1], offset[..., 0])
+
+        # calculate sh bases for the given number of sh
+        if num_sh == 2:
+            sh_basis = torch.stack([torch.cos(theta) * torch.sin(theta), torch.cos(2*theta) * torch.sin(2*theta)], dim=-1)
+        elif num_sh == 4:
+            sh_basis = torch.stack([torch.cos(theta) * torch.sin(theta), torch.cos(2*theta) * torch.sin(2*theta), torch.cos(3*theta) * torch.sin(3*theta), torch.cos(4*theta) * torch.sin(4*theta)], dim=-1)
+        elif num_sh == 6:
+            sh_basis = torch.stack([ torch.cos(theta), torch.sin(theta), torch.cos(2 * theta), torch.sin(2 * theta), torch.cos(3 * theta), torch.sin(3 * theta)], dim=-1)
+        else:
+            sh_basis = torch.ones_like(theta)
+        sh = 1 / (1 + (sh_basis * sh_coeff).sum(dim=-1) + 1e-10)
+        
+        # sh basis inference on transformed coordinate
+        transform = sh[..., None, None] * scale[..., None] * rot
+
+        # rbf inference
+        ks = torch.matmul(transform.swapaxes(-1, -2), transform)
+        out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
+        out = out
+
+    elif d == 3:
+        rot = get_matrix_from_quaternions(rot)
+        transform = rot * scale[..., None, :]
+        ks = torch.matmul(transform, transform.swapaxes(-1, -2))
+        out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
+    else:
+        raise NotImplementedError
+
+    return out, offset
+
+@torch.jit.script
 def rbf_ivq_m_fb(x, kc, ks):
     """
         Inputs:
@@ -156,11 +206,13 @@ def rbf_ivq_m_fb(x, kc, ks):
     rot = ks[..., d:]
     if d == 2:
         rot = get_matrix_from_angle(rot)
-        ks = torch.matmul(rot * scale[..., None, :], scale[..., None] * rot.swapaxes(-1, -2))
+        transform = scale[..., None].detach() * rot
+        ks = torch.matmul(transform.swapaxes(-1, -2), transform)
         out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
     elif d == 3:
         rot = get_matrix_from_quaternions(rot)
-        ks = torch.matmul(rot * scale[..., None, :], scale[..., None] * rot.swapaxes(-1, -2))
+        transform = scale[..., None] * rot
+        ks = torch.matmul(transform.swapaxes(-1, -2), transform)
         out = 1 / (1 + ((offset[..., None] * ks).sum(-2) * offset).sum(-1))
     else:
         raise NotImplementedError
@@ -420,6 +472,8 @@ def get_param_groups(model):
                 k = 'kc0'
             elif name.startswith('ks0'):
                 k = 'ks0'
+            elif name.startswith('lsh0'):
+                k = 'lsh0'
             else:
                 raise NotImplementedError
             if k not in param_groups:
